@@ -37,8 +37,8 @@ class PackScanCli(object):
                 print 'Invalid input please try again'
                 exit(1)
         else:
-            host = self.run_com('hostname').strip()
-        release = self.run_com('cat /etc/redhat-release').strip()
+            host = self.run_com('hostname')[1].strip()
+        release = self.run_com('cat /etc/redhat-release')[1].strip()
 
         output = self.run_com('rpm -qa --qf "%{NAME}|'
             '%{VERSION}|'
@@ -49,29 +49,34 @@ class PackScanCli(object):
             '%{BUILDHOST}|'
             '%{SOURCERPM}|'
             '%{LICENSE}|%'
-            '{PACKAGER}\n"')
+            '{PACKAGER}\n"')[1]
 
         installed_packages = [PkgInfo(x) for x in output.splitlines()]
         rh_packages = filter(PkgInfo.is_red_hat_pkg, installed_packages)
         greatest, greatest_build = reduce(self.update_info, installed_packages, (None, None))
 
-        curr_date = self.run_com('date +%s').strip()
+        curr_date = self.run_com('date +%s')[1].strip()
         result = "%s (%s)  -  %s" % (host, release, curr_date)
-
+        result += "\nRed Hat (Y/N), "
         if (len(rh_packages) > 0):
-            result += "\nRed Hat (Y/N), Y"
+            result += "Y"
             result += "\nRH Pkgs, %s/%s" % (len(rh_packages), len(installed_packages))
             result += "\nLast Installed, "
             result += self.details_install(greatest)
 
             result += "\nLast Built, %s" % self.details_built(greatest_build)
         else:
-            result += "\nRed Hat (Y/N), N"
-        # if run_com('command -v virt-what').strip():
-        #     virt_what_output = run_com('sudo virt-what')  # Virt-what needs to run as root
-        #     if len(virt_what_output) > 0:
-
-        #     result += "\n"
+            result += "N"
+        result += "\nVirt-What installed (Y/N), "
+        if self.run_com('command -v virt-what')[1].strip():
+            result += "Y"
+            exitcode, virt_what_output = self.run_com('sudo virt-what')  # Virt-what needs to run as root
+            if exitcode == 0:  # We shouldn't need to check for error messages here due to the sudo in the command
+                # We should also only need the first line of virt-what output
+                
+                result += "\nHypervisor, %s" % virt_what_output.split('\n')[0]
+        else:
+            result += "N"
 
         self.save_results(result, host)
 
@@ -100,9 +105,9 @@ class PackScanCli(object):
     def run_com(self, com):
         if self.ssh:
             command = "ssh %s@%s '%s'" % (self.user, host, com)
-            return commands.getoutput(command)
+            return commands.getstatusoutput(command)
         else:
-            return commands.getoutput(com)
+            return commands.getstatusoutput(com)
 
     def details_built(self, pkg):
         details = "%s-%s-%s" % (pkg.name, pkg.version, pkg.release)
