@@ -5,130 +5,146 @@ import gettext
 import optparse
 import commands
 import subprocess
+import re
 
 _ = gettext.gettext
 
 class PackScanCli(object):
-	def __init__(self):
-		self.rhcount = 0
-		self.greatest = []
-		self.greatest_build = []
-		self.cols = []
-		self.user = None
-		self.host = None
-		self.ssh = False
-		self.options = None
-		self.args = None
-		self.parser = optparse.OptionParser()
-		self.add_options()
-		self.main()
+    def __init__(self):
+        self.cols = []
+        self.user = None
+        self.ssh = False
+        self.options = None
+        self.args = None
+        self.parser = optparse.OptionParser()
+        self.add_options()
+        self.main()
 
-	def main(self, args=None):
-		#TODO: Add arg parsing for list of hosts to cover functionality of pack-scan-ssh.pl
-		#TODO: Add file read in functionality
-		if not args:
-			args = sys.argv[1:]
+    def main(self, args=None):
+        #TODO: Add arg parsing for list of hosts to cover functionality of pack-scan-ssh.pl
+        #TODO: Add file read in functionality
+        if not args:
+            args = sys.argv[1:]
 
-		self.options, self.args = self.parser.parse_args(args)
+        self.options, self.args = self.parser.parse_args(args)
 
-		if hasattr(self.options, "user_host") and self.options.user_host:
-			try:
-				self.user, self.host = self.options.user_host
-				print 'user: %s\nhost: %s' % (self.user, self.host)
-				self.ssh = True
-			except ValueError, e:
-				print 'NO GOOOD'
-		else:
-			self.host = self.run_com('hostname')
-		# if len(args) == 2:
-		# 	self.user = args[1]
-		# 	self.host = args[0]
-		# else:
-		# 	print _('No host provided. Running for localhost')
-		# 	self.host = self.run_com('hostname')
-		release = self.run_com('cat /etc/redhat-release')
-		release = release.strip()
-		self.host = self.host.strip()
+        if hasattr(self.options, "user_host") and self.options.user_host:
+            try:
+                self.user, host = self.options.user_host
+                print 'user: %s\nhost: %s' % (self.user, host)
+                self.ssh = True
+            except ValueError, e:
+                print 'Invalid input please try again'
+                exit(1)
+        else:
+            host = self.run_com('hostname').strip()
+        release = self.run_com('cat /etc/redhat-release').strip()
 
-		output = self.run_com('rpm -qa --qf "%{NAME}|'
-			'%{VERSION}|'
-			'%{RELEASE}|'
-			'%{INSTALLTIME}|'
-			'%{VENDOR}|'
-			'%{BUILDTIME}|'
-			'%{BUILDHOST}|'
-			'%{SOURCERPM}|'
-			'%{LICENSE}|'
-			'%{PACKAGER}\n"')
+        output = self.run_com('rpm -qa --qf "%{NAME}|'
+            '%{VERSION}|'
+            '%{RELEASE}|'
+            '%{INSTALLTIME}|'
+            '%{VENDOR}|'
+            '%{BUILDTIME}|'
+            '%{BUILDHOST}|'
+            '%{SOURCERPM}|'
+            '%{LICENSE}|%'
+            '{PACKAGER}\n"')
 
-		lines = output.split('\n')
+        installed_packages = [PkgInfo(x) for x in output.splitlines()]
+        rh_packages = filter(PkgInfo.is_red_hat_pkg, installed_packages)
+        greatest, greatest_build = reduce(self.update_info, installed_packages, (None, None))
 
-		self.greatest = []
-		self.greatest_build = []
-		self.rhcount = 0
+        curr_date = self.run_com('date +%s').strip()
+        result = "%s (%s)  -  %s" % (host, release, curr_date)
 
-		for line in lines:
-			self._update_rh_count(line.split("|"))
+        if (len(rh_packages) > 0):
+            result += "\nRed Hat (Y/N), Y"
+            result += "\nRH Pkgs, %s/%s" % (len(rh_packages), len(installed_packages))
+            result += "\nLast Installed, "
+            result += self.details_install(greatest)
 
-		result = ""
-		curr_date = self.run_com('date +%s').strip()
-		result = "%s (%s)  -  %s" % (self.host, release, curr_date)
+            result += "\nLast Built, %s" % self.details_built(greatest_build)
+        else:
+            result += "\nRed Hat (Y/N), N"
+        # if run_com('command -v virt-what').strip():
+        #     virt_what_output = run_com('sudo virt-what')  # Virt-what needs to run as root
+        #     if len(virt_what_output) > 0:
 
-		if (self.rhcount != 0):
-			result += "\nRed Hat (Y/N), Y\n"
-			result += "RH Pkgs, %s/%s" % (self.rhcount, len(lines))
-			result += "\nLast Installed, "
-			result += self.details_install(self.greatest)
+        #     result += "\n"
 
-			result += "\nLast Built, %s" % self.details_built(self.greatest_build)
-		else:
-			result += "\nRed Hat (Y/N), N\n"
+        self.save_results(result, host)
 
-		self.save_results(result, self.host)
+    def update_info(self, vals, pkg):
+        greatest, greatest_build = vals  # unpack the values as given by the initial call to reduce
+        if pkg and pkg.is_red_hat:
+            if greatest == None:
+                greatest = pkg
+            elif greatest.install_time < pkg.install_time:
+                greatest = pkg
+            if greatest_build == None:
+                greatest_build = pkg
+            elif greatest_build.build_time < pkg.build_time:
+                greatest_build = pkg
+        return (greatest, greatest_build)
 
-	def _update_rh_count(self, col):
-		if 'redhat.com' in col[6] and 'fedora' not in col[6] and 'rhndev' not in col[6]:
-			self.rhcount += 1
-			if len(self.greatest) == 0:
-				self.greatest = col
-			elif self.greatest[3] < col[3]:
-				self.greatest = col
-			if len(self.greatest_build) == 0:
-				self.greatest_build = col
-			elif self.greatest_build[5] < col[5]:
-				self.greatest_build = col
+    def save_results(self, output, host):
+        with open('%s.csv' % host, 'w') as f:
+            f.write(output)
+        subprocess.call(["zip", "%s.zip" % host, "%s.csv" % host])
+        subprocess.call(["rm", "%s.csv" % host])
+        if not self.ssh:
+            print "Please submit %s.zip\n" % host
 
-	def save_results(self, output, host):
-		with open('%s.csv' % host, 'w') as f:
-			f.write(output)
-		subprocess.call(["zip", "%s.zip" % host, "%s.csv" % host])
-		subprocess.call(["rm", "%s.csv" % host])
-		if not self.ssh:
-			print "Please submit %s.zip\n" % host
+    # Ensures the command is run on the appropriate machine
+    def run_com(self, com):
+        if self.ssh:
+            command = "ssh %s@%s '%s'" % (self.user, host, com)
+            return commands.getoutput(command)
+        else:
+            return commands.getoutput(com)
 
-	def run_com(self, com):
-		if self.ssh:
-			command = "ssh %s@%s '%s'" % (self.user, self.host, com)
-			return commands.getoutput(command)
-		else:
-			return commands.getoutput(com)
+    def details_built(self, pkg):
+        details = "%s-%s-%s" % (pkg.name, pkg.version, pkg.release)
+        local_time = time.localtime(float(pkg.build_time))
+        details += " Built: %s" % time.strftime("%x %X",local_time)
+        return details
 
-	def details_built(self, cols):
-		tmp = "%s-%s-%s" % (cols[0], cols[1], cols[2])
-		local_time = time.localtime(float(cols[5]))
-		tmp += " Built: %s" % time.strftime("%x %X",local_time)
-		return tmp
+    def details_install(self, pkg):
+        details = "%s-%s-%s" % (pkg.name, pkg.version, pkg.release)
+        local_time = time.localtime(float(pkg.install_time))
+        details += " Installed: %s" % time.strftime("%x %X",local_time)
+        return details
 
-	def details_install(self, cols):
-		tmp = "%s-%s-%s" % (cols[0], cols[1], cols[2])
-		local_time = time.localtime(float(cols[3]))
-		tmp += " Installed: %s" % time.strftime("%x %X",local_time)
-		return tmp
+    def add_options(self):
+        self.parser.add_option("-r", "--remote", help=_("Executes pack-scan using ssh for the given [USER HOST]"), dest="user_host", default=None, nargs=2)
+        self.parser.add_option("-f", "--file", help=_("File of [USER HOST] to run the tool against."), dest="file")
 
-	def add_options(self):
-		self.parser.add_option("-r", "--remote", help=_("Executes pack-scan using ssh for the given [USER HOST]"), dest="user_host", default=None, nargs=2)
-		self.parser.add_option("-f", "--file", help=_("File of [USER HOST] to run the tool against."), dest="file")
+
+# This class contains the information retrieved about and installed package
+# as returned by the query using rpm
+class PkgInfo(object):
+    def __init__(self, row, separator='|'):
+        cols = row.split(separator)
+        self.name = cols[0]
+        self.version = cols[1]
+        self.release = cols[2]
+        self.install_time = cols[3]
+        self.vendor = cols[4]
+        self.build_time = cols[5]
+        self.build_host = cols[6]
+        self.source_rpm = cols[7]
+        self.license = cols[8]
+        self.packager = cols[9]
+        self.is_red_hat = False
+        if ('redhat.com' in self.build_host and
+        'fedora' not in self.build_host and
+        'rhndev' not in self.build_host):
+            self.is_red_hat = True
+
+    def is_red_hat_pkg(self):
+        return self.is_red_hat
 
 
 if __name__ == '__main__':
-	PackScanCli()
+    PackScanCli()
