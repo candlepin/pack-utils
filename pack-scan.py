@@ -1,9 +1,10 @@
 #!/usr/bin/env python
-import subprocess
 import sys
 import time
-import csv
 import gettext
+import optparse
+import commands
+import subprocess
 
 _ = gettext.gettext
 
@@ -16,22 +17,35 @@ class PackScanCli(object):
 		self.user = None
 		self.host = None
 		self.ssh = False
+		self.options = None
+		self.args = None
+		self.parser = optparse.OptionParser()
+		self.add_options()
 		self.main()
 
-	def main(self):
+	def main(self, args=None):
 		#TODO: Add arg parsing for list of hosts to cover functionality of pack-scan-ssh.pl
-		# p = argparse.ArgumentParser(description=_("Gathers basic information on Red Hat packages\ninstalled on the system."))
-		args = sys.argv[1:]
-		if len(args) == 1 or len(args) > 2:
-			print "Usage: ./pack-info.pl [USER HOST]\n"
-			sys.exit(1)
+		#TODO: Add file read in functionality
+		if not args:
+			args = sys.argv[1:]
 
-		if len(args) == 2:
-			self.user = args[1]
-			self.host = args[0]
+		self.options, self.args = self.parser.parse_args(args)
+
+		if hasattr(self.options, "user_host") and self.options.user_host:
+			try:
+				self.user, self.host = self.options.user_host
+				print 'user: %s\nhost: %s' % (self.user, self.host)
+				self.ssh = True
+			except ValueError, e:
+				print 'NO GOOOD'
 		else:
-			print _('No host provided. Running for localhost')
 			self.host = self.run_com('hostname')
+		# if len(args) == 2:
+		# 	self.user = args[1]
+		# 	self.host = args[0]
+		# else:
+		# 	print _('No host provided. Running for localhost')
+		# 	self.host = self.run_com('hostname')
 		release = self.run_com('cat /etc/redhat-release')
 		release = release.strip()
 		self.host = self.host.strip()
@@ -53,8 +67,8 @@ class PackScanCli(object):
 		self.greatest_build = []
 		self.rhcount = 0
 
-		self.cols = [x.split('|') for x in lines]
-		[self._update_rh_count(col) for col in self.cols]
+		for line in lines:
+			self._update_rh_count(line.split("|"))
 
 		result = ""
 		curr_date = self.run_com('date +%s').strip()
@@ -73,50 +87,48 @@ class PackScanCli(object):
 		self.save_results(result, self.host)
 
 	def _update_rh_count(self, col):
-		if ('redhat.com' in col and 
-	       'fedora' not in col and 
-	       'rhndev' not in col):
+		if 'redhat.com' in col[6] and 'fedora' not in col[6] and 'rhndev' not in col[6]:
 			self.rhcount += 1
-
-	      	if (len(self.greatest) == 0):
-	        	self.greatest = col
-	      	elif self.greatest[3] < self.cols[3]:
-	        	self.greatest = col
-
-	      	if (len(self.greatest_build) == 0):
-	        	self.greatest_build = col
-
-	        elif (self.greatest_build[5] < self.cols[5]):
-	        	self.greatest_build = col
+			if len(self.greatest) == 0:
+				self.greatest = col
+			elif self.greatest[3] < col[3]:
+				self.greatest = col
+			if len(self.greatest_build) == 0:
+				self.greatest_build = col
+			elif self.greatest_build[5] < col[5]:
+				self.greatest_build = col
 
 	def save_results(self, output, host):
 		with open('%s.csv' % host, 'w') as f:
 			f.write(output)
 		subprocess.call(["zip", "%s.zip" % host, "%s.csv" % host])
 		subprocess.call(["rm", "%s.csv" % host])
-		if not ssh:
-			print "Please submit $host.zip\n"
+		if not self.ssh:
+			print "Please submit %s.zip\n" % host
 
-	def run_com(self, com, ssh=False, **keywords):
+	def run_com(self, com):
 		if self.ssh:
-			com = ["ssh", "%s@'%s'" % (user, host), str(com)]
-			return subprocess.check_output(com)
+			command = "ssh %s@%s '%s'" % (self.user, self.host, com)
+			return commands.getoutput(command)
 		else:
-			return subprocess.check_output(com.split(' '))
+			return commands.getoutput(com)
 
 	def details_built(self, cols):
 		tmp = "%s-%s-%s" % (cols[0], cols[1], cols[2])
-		tmp += " Installed: "
-		time = time.localtime(cols[5] + 0)
-		tmp += str(time)
+		local_time = time.localtime(float(cols[5]))
+		tmp += " Built: %s" % time.strftime("%x %X",local_time)
 		return tmp
 
 	def details_install(self, cols):
 		tmp = "%s-%s-%s" % (cols[0], cols[1], cols[2])
-		tmp += " Installed: "
-		time = time.localtime(cols[3] + 0)
-		tmp += str(time)
+		local_time = time.localtime(float(cols[3]))
+		tmp += " Installed: %s" % time.strftime("%x %X",local_time)
 		return tmp
+
+	def add_options(self):
+		self.parser.add_option("-r", "--remote", help=_("Executes pack-scan using ssh for the given [USER HOST]"), dest="user_host", default=None, nargs=2)
+		self.parser.add_option("-f", "--file", help=_("File of [USER HOST] to run the tool against."), dest="file")
+
 
 if __name__ == '__main__':
 	PackScanCli()
