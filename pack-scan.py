@@ -51,10 +51,10 @@ class PackScanCli(object):
             '%{LICENSE}|%'
             '{PACKAGER}\n"')[1]
 
-        installed_packages = [PkgInfo(x) for x in output.splitlines()]
+        installed_packages = [PkgInfo(line) for line in output.splitlines()]
         rh_packages = filter(PkgInfo.is_red_hat_pkg, installed_packages)
         greatest = max(rh_packages, key= lambda x: x.install_time)
-        greatest, greatest_build = reduce(self.update_info, rh_packages, (None, None))
+        greatest_build = max(rh_packages, key= lambda x: x.build_time)
 
         curr_date = self.run_com('date +%s')[1].strip()
         result = "%s (%s)  -  %s" % (host, release, curr_date)
@@ -74,25 +74,13 @@ class PackScanCli(object):
             exitcode, virt_what_output = self.run_com('sudo virt-what')  # Virt-what needs to run as root
             if exitcode == 0:
                 if virt_what_output:
-                # Writes all virt-what facts to the output as a double quoted field. 
-                result += '\nVirt-what Facts, "%s"' % virt_what_output.rstrip().replace('\n', ', ')
+                    # Writes all virt-what facts to the output as a double quoted field.
+                    result += '\nVirt-what Facts, "%s"' % virt_what_output.rstrip().replace('\n', ', ')
         else:
             result += "N"
 
         self.save_results(result, host)
 
-    def update_info(self, vals, pkg):
-        greatest, greatest_build = vals  # unpack the values as given by the initial call to reduce
-        if pkg and pkg.is_red_hat:
-            if greatest == None:
-                greatest = pkg
-            elif greatest.install_time < pkg.install_time:
-                greatest = pkg
-            if greatest_build == None:
-                greatest_build = pkg
-            elif greatest_build.build_time < pkg.build_time:
-                greatest_build = pkg
-        return (greatest, greatest_build)
 
     def save_results(self, output, host):
         with open('%s.csv' % host, 'w') as f:
