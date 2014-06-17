@@ -53,7 +53,8 @@ class PackScanCli(object):
 
         installed_packages = [PkgInfo(x) for x in output.splitlines()]
         rh_packages = filter(PkgInfo.is_red_hat_pkg, installed_packages)
-        greatest, greatest_build = reduce(self.update_info, installed_packages, (None, None))
+        greatest = max(rh_packages, key= lambda x: x.install_time)
+        greatest, greatest_build = reduce(self.update_info, rh_packages, (None, None))
 
         curr_date = self.run_com('date +%s')[1].strip()
         result = "%s (%s)  -  %s" % (host, release, curr_date)
@@ -71,10 +72,10 @@ class PackScanCli(object):
         if self.run_com('command -v virt-what')[1].strip():
             result += "Y"
             exitcode, virt_what_output = self.run_com('sudo virt-what')  # Virt-what needs to run as root
-            if exitcode == 0:  # We shouldn't need to check for error messages here due to the sudo in the command
-                # We should also only need the first line of virt-what output
-                
-                result += "\nHypervisor, %s" % virt_what_output.split('\n')[0]
+            if exitcode == 0:
+                if virt_what_output:
+                # Writes all virt-what facts to the output as a double quoted field. 
+                result += '\nVirt-what Facts, "%s"' % virt_what_output.rstrip().replace('\n', ', ')
         else:
             result += "N"
 
@@ -134,9 +135,9 @@ class PkgInfo(object):
         self.name = cols[0]
         self.version = cols[1]
         self.release = cols[2]
-        self.install_time = cols[3]
+        self.install_time = long(cols[3])
         self.vendor = cols[4]
-        self.build_time = cols[5]
+        self.build_time = long(cols[5])
         self.build_host = cols[6]
         self.source_rpm = cols[7]
         self.license = cols[8]
