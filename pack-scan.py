@@ -8,7 +8,6 @@ import re
 
 class PackScanCli(object):
     def __init__(self):
-        self.cols = []
         self.user = None
         self.ssh = False
         self.options = None
@@ -20,103 +19,9 @@ class PackScanCli(object):
     def main(self, args=None):
         #TODO: Add arg parsing for list of hosts to cover functionality of pack-scan-ssh.pl
         #TODO: Add file read in functionality
-        if not args:
-            args = sys.argv[1:]
 
-        self.options, self.args = self.parser.parse_args(args)
-        if hasattr(self.options, "user_host") and self.options.user_host:
-            try:
-                self.user, host = self.options.user_host
-                print 'user: %s\nhost: %s' % (self.user, host)
-                self.ssh = True
-            except ValueError, e:
-                print 'Invalid input please try again'
-                exit(1)
-        else:
-            host = self.run_com('hostname')[1].strip()
-        release = self.run_com('cat /etc/redhat-release')[1].strip()
-
-        output = self.run_com('rpm -qa --qf "%{NAME}|'
-            '%{VERSION}|'
-            '%{RELEASE}|'
-            '%{INSTALLTIME}|'
-            '%{VENDOR}|'
-            '%{BUILDTIME}|'
-            '%{BUILDHOST}|'
-            '%{SOURCERPM}|'
-            '%{LICENSE}|%'
-            '{PACKAGER}\n"')[1]
-
-        installed_packages = [PkgInfo(line) for line in output.splitlines()]
-        rh_packages = filter(PkgInfo.is_red_hat_pkg, installed_packages)
-        greatest = max(rh_packages, key= lambda x: x.install_time)
-        greatest_build = max(rh_packages, key= lambda x: x.build_time)
-
-        curr_date = self.run_com('date +%s')[1].strip()
-        result = "%s (%s)  -  %s" % (host, release, curr_date)
-        result += "\nRed Hat (Y/N), "
-        if (len(rh_packages) > 0):
-            result += "Y"
-            result += "\nRH Pkgs, %s/%s" % (len(rh_packages), len(installed_packages))
-            result += "\nLast Installed, "
-            result += greatest.details_install()
-
-            result += "\nLast Built, %s" % greatest_build.details_built()
-        else:
-            result += "N"
-        if self.run_com('id -u')[1] != '0':
-            # print self.run_com('id -u')[1]
-            result += "\nvirt.is_guest, Not run as root"
-            result += "\nvirt.host_type, Not run as root"
-            result += "\nDmi Info, Not run as root"
-        else:
-            result += "\nVirt-What installed (Y/N), "
-
-            if self.run_com('command -v virt-what')[1].strip():
-                result += "Y"
-                exitcode, virt_what_output = self.run_com('virt-what')
-                print virt_what_output
-                if exitcode == 0:
-                    print virt_what_output
-                    if virt_what_output:
-                        # Writes all virt-what facts to the output as a double quoted field.
-                        result += '\nVirt-what Facts, "%s"' % virt_what_output.rstrip().replace('\n', ', ')
-                    else:
-                        result += '\nVirt Host, None'
-            else:
-                result += "N"
-            dmiinfo = self.run_com('dmidecode -t 4')[1].strip()
-            core_count_match = re.findall('Core Count: ([0-9]+)', dmiinfo)
-            socket_count = len(re.findall('Socket Designation', dmiinfo))
-            num_cores = sum([int(x) for x in core_count_match])
-
-            result += "\nCores, %i" % num_cores
-            result += "\nSockets, %i" % socket_count
-
-        self.save_results(result, host)
-
-    def save_results(self, output, host):
-        filename = '%s.csv' % host
-        try:
-            f = open(filename, 'w')
-            f.write(output)
-            f.close()
-        except EnvironmentError, e:
-            sys.stderr.write('Error writing to %s: %s\n' % (filename, e))
-            f.close()
-        subprocess.call(["zip", "%s.zip" % host, "%s.csv" % host])
-        subprocess.call(["rm", "%s.csv" % host])
-
-        if not self.ssh:
-            print "Please submit %s.zip\n" % host
-
-    # Ensures the command is run on the appropriate machine
-    def run_com(self, com):
-        if self.ssh:
-            command = "ssh %s@%s '%s'" % (self.user, host, com)
-            return commands.getstatusoutput(command)
-        else:
-            return commands.getstatusoutput(com)
+        test = PackScanCmd()
+        test.main()
 
     def add_options(self):
         self.parser.add_option("-r", "--remote", help="Executes pack-scan using ssh for the given [USER HOST]", dest="user_host", default=None, nargs=2)
@@ -161,6 +66,101 @@ class PkgInfo(object):
 
     def details(self):
         return "%s-%s-%s" % (self.name, self.version, self.release)
+
+# As the requirements are similar the following few classes are modelled after RHO's RhoCmd set of classes
+# Each class represents an option/command that could be passed to PackScan
+class PackScanCmd(object):
+    name = "base"
+    fields = []
+
+    def __init__(self):
+        self.cmd_results = {}
+        self.data = {}
+        self.exitcode = {}
+        self.cmds = {
+            "host" : 'hostname',
+            "release" : 'cat /etc/redhat-release',
+            "rpm_output" :  'rpm -qa --qf "%{NAME}|'
+                            '%{VERSION}|'
+                            '%{RELEASE}|'
+                            '%{INSTALLTIME}|'
+                            '%{VENDOR}|'
+                            '%{BUILDTIME}|'
+                            '%{BUILDHOST}|'
+                            '%{SOURCERPM}|'
+                            '%{LICENSE}|%'
+                            '{PACKAGER}\n"',
+            "date" : 'date',
+            "uid" : 'id -u',
+            "virt_what_path" : 'command -v virt-what',
+            "virt_what" : 'virt-what',
+            "dmiinfo" : 'dmidecode -t 4',
+        }
+
+    def populate_data(self):
+        for var, cmd in self.cmds.iteritems():
+            self.exitcode[var], self.cmd_results[var] = self.run_cmd(cmd)
+        self.parse_data()
+
+    def parse_data(self):
+        for key, value in self.cmd_results.iteritems():
+            setattr(self, key, value.strip())
+
+    def run_cmd(self, cmd):
+        return commands.getstatusoutput(cmd)
+
+    def main(self):
+        self.populate_data()
+
+        installed_packages = [PkgInfo(line) for line in self.rpm_output.splitlines()]
+        rh_packages = filter(PkgInfo.is_red_hat_pkg, installed_packages)
+        greatest = max(rh_packages, key= lambda x: x.install_time)
+        greatest_build = max(rh_packages, key= lambda x: x.build_time)
+
+        result = "%s (%s)  -  %s" % (self.host, self.release, self.date)
+        result += "\nRed Hat (Y/N), "
+        if (len(rh_packages) > 0):
+            result += "Y"
+            result += "\nRH Pkgs, %s/%s" % (len(rh_packages), len(installed_packages))
+            result += "\nLast Installed, "
+            result += greatest.details_install()
+
+            result += "\nLast Built, %s" % greatest_build.details_built()
+        else:
+            result += "N"
+        if self.uid != '0':
+            result += "\nvirt.is_guest, Not run as root"
+            result += "\nvirt.host_type, Not run as root"
+            result += "\nDmi Info, Not run as root"
+        else:
+            result += "\nVirt-What installed (Y/N), "
+
+            if self.virt_what_path:
+                result += "Y"
+                if self.exitcode['virt_what'] == 0:
+                    if self.virt_what:
+                        # Writes all virt-what facts to the output as a double quoted field.
+                        result += '\nVirt-what Facts, "%s"' % self.virt_what.replace('\n', ', ')
+                    else:
+                        result += '\nVirt Host, None'
+            else:
+                result += "N"
+        self.save_results(result, self.host)
+
+    def save_results(self, output, host):
+        filename = '%s.csv' % host
+        try:
+            f = open(filename, 'w')
+            f.write(output)
+            f.close()
+        except EnvironmentError, e:
+            sys.stderr.write('Error writing to %s: %s\n' % (filename, e))
+            f.close()
+        subprocess.call(["zip", "%s.zip" % host, "%s.csv" % host])
+        subprocess.call(["rm", "%s.csv" % host])
+
+
+
 
 if __name__ == '__main__':
     PackScanCli()
