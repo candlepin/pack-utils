@@ -1,13 +1,10 @@
 #!/usr/bin/env python
 import sys
 import time
-import gettext
 import optparse
 import commands
 import subprocess
 import re
-
-_ = gettext.gettext
 
 class PackScanCli(object):
     def __init__(self):
@@ -27,7 +24,6 @@ class PackScanCli(object):
             args = sys.argv[1:]
 
         self.options, self.args = self.parser.parse_args(args)
-
         if hasattr(self.options, "user_host") and self.options.user_host:
             try:
                 self.user, host = self.options.user_host
