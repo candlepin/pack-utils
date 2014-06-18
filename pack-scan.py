@@ -63,30 +63,54 @@ class PackScanCli(object):
             result += "Y"
             result += "\nRH Pkgs, %s/%s" % (len(rh_packages), len(installed_packages))
             result += "\nLast Installed, "
-            result += self.details_install(greatest)
+            result += greatest.details_install()
 
-            result += "\nLast Built, %s" % self.details_built(greatest_build)
+            result += "\nLast Built, %s" % greatest_build.details_built()
         else:
             result += "N"
-        result += "\nVirt-What installed (Y/N), "
-        if self.run_com('command -v virt-what')[1].strip():
-            result += "Y"
-            exitcode, virt_what_output = self.run_com('sudo virt-what')  # Virt-what needs to run as root
-            if exitcode == 0:
-                if virt_what_output:
-                    # Writes all virt-what facts to the output as a double quoted field.
-                    result += '\nVirt-what Facts, "%s"' % virt_what_output.rstrip().replace('\n', ', ')
+        if self.run_com('id -u')[1] != '0':
+            # print self.run_com('id -u')[1]
+            result += "\nvirt.is_guest, Not run as root"
+            result += "\nvirt.host_type, Not run as root"
+            result += "\nDmi Info, Not run as root"
         else:
-            result += "N"
+            result += "\nVirt-What installed (Y/N), "
+
+            if self.run_com('command -v virt-what')[1].strip():
+                result += "Y"
+                exitcode, virt_what_output = self.run_com('virt-what')
+                print virt_what_output
+                if exitcode == 0:
+                    print virt_what_output
+                    if virt_what_output:
+                        # Writes all virt-what facts to the output as a double quoted field.
+                        result += '\nVirt-what Facts, "%s"' % virt_what_output.rstrip().replace('\n', ', ')
+                    else:
+                        result += '\nVirt Host, None'
+            else:
+                result += "N"
+            dmiinfo = self.run_com('dmidecode -t 4')[1].strip()
+            core_count_match = re.findall('Core Count: ([0-9]+)', dmiinfo)
+            socket_count = len(re.findall('Socket Designation', dmiinfo))
+            num_cores = sum([int(x) for x in core_count_match])
+
+            result += "\nCores, %i" % num_cores
+            result += "\nSockets, %i" % socket_count
 
         self.save_results(result, host)
 
-
     def save_results(self, output, host):
-        with open('%s.csv' % host, 'w') as f:
+        filename = '%s.csv' % host
+        try:
+            f = open(filename, 'w')
             f.write(output)
+            f.close()
+        except EnvironmentError, e:
+            sys.stderr.write('Error writing to %s: %s\n' % (filename, e))
+            f.close()
         subprocess.call(["zip", "%s.zip" % host, "%s.csv" % host])
         subprocess.call(["rm", "%s.csv" % host])
+
         if not self.ssh:
             print "Please submit %s.zip\n" % host
 
@@ -98,21 +122,9 @@ class PackScanCli(object):
         else:
             return commands.getstatusoutput(com)
 
-    def details_built(self, pkg):
-        details = "%s-%s-%s" % (pkg.name, pkg.version, pkg.release)
-        local_time = time.localtime(float(pkg.build_time))
-        details += " Built: %s" % time.strftime("%x %X",local_time)
-        return details
-
-    def details_install(self, pkg):
-        details = "%s-%s-%s" % (pkg.name, pkg.version, pkg.release)
-        local_time = time.localtime(float(pkg.install_time))
-        details += " Installed: %s" % time.strftime("%x %X",local_time)
-        return details
-
     def add_options(self):
-        self.parser.add_option("-r", "--remote", help=_("Executes pack-scan using ssh for the given [USER HOST]"), dest="user_host", default=None, nargs=2)
-        self.parser.add_option("-f", "--file", help=_("File of [USER HOST] to run the tool against."), dest="file")
+        self.parser.add_option("-r", "--remote", help="Executes pack-scan using ssh for the given [USER HOST]", dest="user_host", default=None, nargs=2)
+        self.parser.add_option("-f", "--file", help="File of [USER HOST] to run the tool against.", dest="file")
 
 
 # This class contains the information retrieved about and installed package
@@ -139,6 +151,20 @@ class PkgInfo(object):
     def is_red_hat_pkg(self):
         return self.is_red_hat
 
+    def details_built(self):
+        details = self.details()
+        local_time = time.localtime(float(self.build_time))
+        details += " Built: %s" % time.strftime("%x %X",local_time)
+        return details
+
+    def details_install(self):
+        details = self.details()
+        local_time = time.localtime(float(self.install_time))
+        details += " Installed: %s" % time.strftime("%x %X",local_time)
+        return details
+
+    def details(self):
+        return "%s-%s-%s" % (self.name, self.version, self.release)
 
 if __name__ == '__main__':
     PackScanCli()
