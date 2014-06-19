@@ -45,21 +45,24 @@ class PackScanCli(object):
 class PkgInfo(object):
     def __init__(self, row, separator='|'):
         cols = row.split(separator)
-        self.name = cols[0]
-        self.version = cols[1]
-        self.release = cols[2]
-        self.install_time = long(cols[3])
-        self.vendor = cols[4]
-        self.build_time = long(cols[5])
-        self.build_host = cols[6]
-        self.source_rpm = cols[7]
-        self.license = cols[8]
-        self.packager = cols[9]
-        self.is_red_hat = False
-        if ('redhat.com' in self.build_host and
-        'fedora' not in self.build_host and
-        'rhndev' not in self.build_host):
-            self.is_red_hat = True
+        if len(cols) < 10:
+            raise PkgInfoParseException()
+        else:
+            self.name = cols[0]
+            self.version = cols[1]
+            self.release = cols[2]
+            self.install_time = long(cols[3])
+            self.vendor = cols[4]
+            self.build_time = long(cols[5])
+            self.build_host = cols[6]
+            self.source_rpm = cols[7]
+            self.license = cols[8]
+            self.packager = cols[9]
+            self.is_red_hat = False
+            if ('redhat.com' in self.build_host and
+            'fedora' not in self.build_host and
+            'rhndev' not in self.build_host):
+                self.is_red_hat = True
 
     def is_red_hat_pkg(self):
         return self.is_red_hat
@@ -78,6 +81,9 @@ class PkgInfo(object):
 
     def details(self):
         return "%s-%s-%s" % (self.name, self.version, self.release)
+
+class PkgInfoParseException(BaseException):
+    pass
 
 # As the requirements are similar the following few classes are modelled after RHO's RhoCmd set of classes
 # Each class represents an option/command that could be passed to PackScan
@@ -152,7 +158,13 @@ class PackScanUserHostCmd(PackScanCmd):
 
     def run_cmd(self, cmd):
         command = "ssh %s@%s '%s'" % (self.user, self.cmd_results['host'], cmd)
-        return commands.getstatusoutput(command)
+        exitcode, result = commands.getstatusoutput(command)
+        print exitcode
+        if exitcode != '0':
+            print "Connection via SSH failed"
+            return (exitcode, "Connection via SSH failed")
+        else:
+            return (exitcode, result)
 
 class PackScanFileCmd(PackScanUserHostCmd):
     name = "file"
@@ -193,10 +205,17 @@ class SystemReport(object):
         ]
 
         self.parse_data()
-        self.installed_packages = [PkgInfo(line) for line in self.rpm_output.splitlines()]
+        try:
+            self.installed_packages = [PkgInfo(line) for line in self.rpm_output.splitlines()]
+        except PkgInfoParseException, e:
+            print "Failed to parse info from RPM"
+            self.installed_packages = {}
         self.rh_packages = filter(PkgInfo.is_red_hat_pkg, self.installed_packages)
-        self.greatest = max(self.rh_packages, key= lambda x: x.install_time)
-        self.greatest_build = max(self.rh_packages, key= lambda x: x.build_time)
+        try:
+            self.greatest = max(self.rh_packages, key= lambda x: x.install_time)
+            self.greatest_build = max(self.rh_packages, key= lambda x: x.build_time)
+        except ValueError, e:
+            pass
 
 
     def __str__(self):
