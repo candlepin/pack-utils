@@ -87,7 +87,7 @@ class PkgInfoParseException(BaseException):
 class PackScanCmd(object):
     name = "base"
     fields = []
-
+    # make seperate class to represent field including all cmds needed, the field title itself and how to create the value of the field from the data
     def __init__(self):
         self.cmd_results = {}
         self.data = {}
@@ -105,7 +105,7 @@ class PackScanCmd(object):
                             '%{SOURCERPM}|'
                             '%{LICENSE}|%'
                             '{PACKAGER}\n"',
-            "date" : 'date',
+            "date" : 'date',  # does this need to be accurate for each host run against or maybe just run once? 
             "uid" : 'id -u',
             "virt_what_path" : 'command -v virt-what',
             "virt_what" : 'virt-what',
