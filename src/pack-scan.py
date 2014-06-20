@@ -8,8 +8,6 @@ import re
 
 class PackScanCli(object):
     def __init__(self):
-        self.user = None
-        self.ssh = False
         self.options = None
         self.args = None
         self.parser = optparse.OptionParser()
