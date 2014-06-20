@@ -159,8 +159,7 @@ class PackScanUserHostCmd(PackScanCmd):
     def run_cmd(self, cmd):
         command = "ssh %s@%s '%s'" % (self.user, self.cmd_results['host'], cmd)
         exitcode, result = commands.getstatusoutput(command)
-        print exitcode
-        if exitcode != '0':
+        if exitcode != 0:
             print "Connection via SSH failed"
             return (exitcode, "Connection via SSH failed")
         else:
