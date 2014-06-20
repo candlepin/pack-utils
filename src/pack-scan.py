@@ -12,7 +12,6 @@ class PackScanCli(object):
         self.args = None
         self.parser = optparse.OptionParser()
         self.add_options()
-        self.main()
 
     def main(self, args=None):
 
@@ -275,4 +274,4 @@ class NotRedHatException(BaseException):
     pass
 
 if __name__ == '__main__':
-    PackScanCli()
+    PackScanCli().main()
