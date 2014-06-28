@@ -82,15 +82,117 @@ class PkgInfo(object):
 class PkgInfoParseException(BaseException):
     pass
 
-# As the requirements are similar the following few classes are modelled after RHO's RhoCmd set of classes
-# Each class represents an option/command that could be passed to PackScan
+class ReportRow(object):
+    def __init__(self, seperator=",", cmd_runner=None):
+        self.fields = [
+            SimpleCommand('date'),
+            SimpleCommand('hostname'),
+            SimpleCommand('cat /etc/redhat-release', name="release"),
+        ]
+        self.seperator = seperator
+
+    def report(self):
+        return self.seperator.join([x.run(cmd_runner) for x in self.fields])
+
+    def header(self):
+        return self.seperator.join([x.header() for x in self.fields])
+
+class CmdRunner(object):
+
+    def run(self, cmd):
+        return commands.getstatusoutput(cmd)
+
+class SshCmdRunner(CmdRunner):
+
+    def __init__(self, user, host):
+        self.user = user
+        self.host = host
+
+    def run(self, cmd):
+        return super(CmdRunner, self).run("ssh %s@%s '%s'" % (self.user, self.host, cmd))
+
+class Command(object):
+
+    def __init__(self):
+        self.output = None
+
+    # returns the fields in csv it will return
+    def header(self):
+        raise NotImplementedError
+    # run takes in a function cmd_runner that returns (exitcode, output) of the command it is passed
+    def run(self, cmd_runner):
+        result = cmd_runner(self.cmd)
+        try:
+            exitcode, output = result
+        except ValueError:
+            # assumes the cmd_runner provided returns only the output of a command
+            output = result
+
+        self.output = output if int(exitcode)==0 else \
+        "Exitcode: %s when running command: %s" % (exitcode, self.cmd) 
+        return self.parse_output()
+
+    def parse_output(self):
+        raise NotImplementedError
+
+class SimpleCommand(Command):
+    def __init__(self, cmd, header=None):
+        super(Command, self).__init__()
+        self.cmd = cmd
+        self.header = header or self.cmd
+        
+
+    def header(self):
+        return self.header
+
+    def parse_output(self):
+        return self.output
+
+class RpmCommand(Command):
+    cmd = 'rpm -qa --qf "%{NAME}|'
+            '%{VERSION}|'
+            '%{RELEASE}|'
+            '%{INSTALLTIME}|'
+            '%{VENDOR}|'
+            '%{BUILDTIME}|'
+            '%{BUILDHOST}|'
+            '%{SOURCERPM}|'
+            '%{LICENSE}|%'
+            '{PACKAGER}\n"'
+    header = "Red Hat (Y/N), RH Pkgs, Last Installed, Last Built"
+
+    def __init__(self):
+        super(Command, self).__init__()
+
+    def header(self):
+        return RpmCommand.header
+
+    def parse_output(self):
+        installed_packages = [PkgInfo(line) for line in self.output.splitlines()]
+        rh_packages = filter(PkgInfo.is_red_hat_pkg, installed_packages)
+        last_installed = max(rh_packages, key= lambda x: x.install_time)
+        last_built = max(rh_packages, key= lambda x: x.build_time)
+        is_red_hat = "Y" if len(rh_packages) > 0 else "N"
+        rhpkgs = "%s/%s" % (len(rh_packages), len(installed_packages))
+        return ",".join([is_red_hat, rhpkgs, last_installed, last_built])
+
+
+
+
+
+
+
+        #TODO virt_what and dmiinfo commands
+        #make appropriate modifications to save results for each possible use case of pack scan
+
+
+
 class PackScanCmd(object):
     name = "base"
     fields = []
     # make seperate class to represent field including all cmds needed, the field title itself and how to create the value of the field from the data
     def __init__(self):
         self.cmd_results = {}
-        self.data = {}
         self.exitcode = {}
         self.cmds = {
             "host" : 'hostname',
@@ -115,11 +217,7 @@ class PackScanCmd(object):
     def populate_data(self):
         for var, cmd in self.cmds.iteritems():
             self.exitcode[var], self.cmd_results[var] = self.run_cmd(cmd)
-        # self.parse_data()
 
-    def parse_data(self):
-        for key, value in self.cmd_results.iteritems():
-            setattr(self, key, value.strip())
 
     def run_cmd(self, cmd):
         return commands.getstatusoutput(cmd)
@@ -148,13 +246,12 @@ class PackScanUserHostCmd(PackScanCmd):
         super(PackScanUserHostCmd, self).__init__()
 
         # Host will be passed in in the case of this command and need not be run remotely
-        del self.cmds['host']
         self.user = user
-        self.cmd_results['host'] = host
+        self.host = host
 
 
     def run_cmd(self, cmd):
-        command = "ssh %s@%s '%s'" % (self.user, self.cmd_results['host'], cmd)
+        command = "ssh %s@%s '%s'" % (self.user, self.host, cmd)
         exitcode, result = commands.getstatusoutput(command)
         if exitcode != 0:
             print "Connection via SSH failed"
